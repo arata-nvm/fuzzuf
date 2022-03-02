@@ -32,11 +32,13 @@ namespace po = boost::program_options;
 struct AFLFuzzerOptions {
     bool forksrv;                           // Optional
     std::string dict_file;                  // Optional
+    std::string executor;                   // Optional
 
     // Default values
     AFLFuzzerOptions() : 
         forksrv(true),
-        dict_file("")
+        dict_file(""),
+        executor("NativeLinuxExecutor")
         {};
 };
 
@@ -73,6 +75,9 @@ std::unique_ptr<TFuzzer> BuildAFLFuzzerFromArgs(
         ("dict_file", 
             po::value<std::string>(&afl_options.dict_file), 
             "Load additional dictionary file.")
+        ("executor", 
+            po::value<std::string>(&afl_options.executor)->default_value(afl_options.executor), 
+            "Select one executor from {NativeLinuxExecutor, NativeLinuxExecutor2}")
         ("pargs", 
             po::value<std::vector<std::string>>(&pargs), 
             "Specify PUT and args for PUT.")

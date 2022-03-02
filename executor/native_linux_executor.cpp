@@ -96,12 +96,13 @@ NativeLinuxExecutor::NativeLinuxExecutor(
     bb_shmid( INVALID_SHMID ),
     afl_shmid( INVALID_SHMID ),
     forksrv_pid( 0 ),
-    forksrv_read_fd( -1 ),
-    forksrv_write_fd( -1 ),
+    // forksrv_read_fd( -1 ),
+    // forksrv_write_fd( -1 ),
     bb_trace_bits( nullptr ),
     afl_trace_bits( nullptr ),
     child_timed_out( false ),
-    record_stdout_and_err( record_stdout_and_err )
+    record_stdout_and_err( record_stdout_and_err ),
+    put_channel( "ipc:///tmp/forkserver.ipc" ) // FIXME: ユーザーが設定可能に
 {
 
 #ifdef __linux__
@@ -229,16 +230,6 @@ void NativeLinuxExecutor::TerminateForkServer() {
     if (fork_server_epoll_fd != -1) {
         close( fork_server_epoll_fd );
         fork_server_epoll_fd = -1;
-    }
-
-    if (forksrv_read_fd != -1) {
-        Util::CloseFile(forksrv_read_fd);
-        forksrv_read_fd = -1;
-    }
-
-    if (forksrv_write_fd != -1) {
-        Util::CloseFile(forksrv_write_fd);
-        forksrv_write_fd = -1;
     }
 
     if (fork_server_stdout_fd != -1) {
@@ -411,85 +402,85 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
 
     std::array< int, 2u > stdout_fd{ 0, 0 };
     std::array< int, 2u > stderr_fd{ 0, 0 };
-    constexpr std::size_t read_size = 8u;
-    boost::container::static_vector< std::uint8_t, read_size > read_buffer;
-    bool timeout = true;
+    // constexpr std::size_t read_size = 8u;
+    // boost::container::static_vector< std::uint8_t, read_size > read_buffer;
+    // bool timeout = true;
+    ExecutePUTAPIResponse response;
     if (forksrv) {
-	// The value tmp which is needed only on persistent mode that is currently not implemented.
-        static u8 tmp[4];
-
-	// Request creating PUT process to fork server
+        // Request creating PUT process to fork server
         // The new PUT execution can be requested to the fork server by writing 4byte values to the pipe.
         // If the PUT launched successfully, the pid of PUT process is returned via the pipe.
         // WriteFile, ReadFile throw exception if writing or reading couldn't consume specified bytes.
         try {
             // FIXME: When persistent mode is implemented, this tmp must be set to the value that represent if the last execution failed for timeout.
-            Util::WriteFile(forksrv_write_fd, tmp, 4);
+            // Util::WriteFile(forksrv_write_fd, tmp, 4);
+            this->put_channel.Send((void *) "ExecutePUT", 10);
 
-            read_buffer.resize( 4u );
-            Util::ReadFile( forksrv_read_fd, read_buffer.data(), 4u, false );
+            // read_buffer.resize( 4u );
+            // Util::ReadFile( forksrv_read_fd, read_buffer.data(), 4u, false );
 
-            epoll_event event;
-            auto left_ms = timeout_ms;
-            while (left_ms > 0) {
-                const auto begin_date = std::chrono::steady_clock::now();
-                auto event_count = epoll_wait( fork_server_epoll_fd, &event, 1, left_ms );
-                if ( event_count < 0 ) {
-                    int e = errno;
-                    if( e != EINTR )
-                        throw fuzzuf::utils::errno_to_system_error(
-                                e,
-                                "epoll_wait failed during the execution"
-                              );
-                }
-                else if( event_count == 0 ) break;
-                else {
-                    if ( event.events & EPOLLIN ) {
-                        if ( event.data.fd == fork_server_stdout_fd )
-                            // Although the buffer may contain data larger than output_block_size, that is not a problem as it is level trigger.
-                            detail::read_chunk( stdout_buffer, fork_server_stdout_fd );
-                        else if( event.data.fd == fork_server_stderr_fd )
-                            // Although the buffer may contain data larger than output_block_size, that is not a problem as it is level trigger.
-                            detail::read_chunk( stderr_buffer, fork_server_stderr_fd );
-                        else if ( event.data.fd == forksrv_read_fd ) {
-                            std::size_t cur_size = read_buffer.size();
-                            read_buffer.resize( read_size );
-                            auto read_stat = read(
-                                    forksrv_read_fd,
-                                    std::next( read_buffer.data(), cur_size ),
-                                    read_size - cur_size
-                                 );
-                            if ( read_stat < 0 ) {
-                                int e = errno;
-                                if ( !( e == EAGAIN || e == EINTR || e == EWOULDBLOCK ) )
-                                    throw fuzzuf::utils::errno_to_system_error(
-                                            e,
-                                            "read pid from child process failed during the execution"
-                                          );
-                            } else {
-                                read_buffer.resize( cur_size + read_stat );
-                                if ( read_buffer.size() == read_size ) {
-                                    left_ms = 0;
-                                    timeout = false;
-                                }
-                            }
-                        }
-                    }
-                    if( event.events == EPOLLHUP || event.events == EPOLLERR )
-                        ERROR("pipe to the child process was unexpectedly closed");
-                }
-                const auto end_date = std::chrono::steady_clock::now();
-                const auto elapsed = std::chrono::duration_cast< std::chrono::milliseconds >( end_date - begin_date ).count();
-                if ( left_ms < elapsed ) left_ms = 0;
-                else left_ms -= elapsed;
-            }
+            // Wait for PUT exit
+            this->put_channel.Recv((void *) &response, sizeof(response));
+
+            // TODO: fork_server_stdout_fd, fork_server_stderr_fd の扱いは保留
+            // epoll_event event;
+            // auto left_ms = timeout_ms;
+            // while (left_ms > 0) {
+            //     const auto begin_date = std::chrono::steady_clock::now();
+
+            //     auto event_count = epoll_wait( fork_server_epoll_fd, &event, 1, left_ms );
+            //     if ( event_count < 0 ) {
+            //         int e = errno;
+            //         if( e != EINTR )
+            //             throw fuzzuf::utils::errno_to_system_error(
+            //                     e,
+            //                     "epoll_wait failed during the execution"
+            //                   );
+            //     }
+            //     else if( event_count == 0 ) break;
+            //     else {
+            //         if ( event.events & EPOLLIN ) {
+            //             if ( event.data.fd == fork_server_stdout_fd )
+            //                 // Although the buffer may contain data larger than output_block_size, that is not a problem as it is level trigger.
+            //                 detail::read_chunk( stdout_buffer, fork_server_stdout_fd );
+            //             else if( event.data.fd == fork_server_stderr_fd )
+            //                 // Although the buffer may contain data larger than output_block_size, that is not a problem as it is level trigger.
+            //                 detail::read_chunk( stderr_buffer, fork_server_stderr_fd );
+            //             else if ( event.data.fd == forksrv_read_fd ) {
+            //                 // std::size_t cur_size = read_buffer.size();
+            //                 // read_buffer.resize( read_size );
+            //                 // auto read_stat = read(
+            //                 //         forksrv_read_fd,
+            //                 //         std::next( read_buffer.data(), cur_size ),
+            //                 //         read_size - cur_size
+            //                 //      );
+            //                 // if ( read_stat < 0 ) {
+            //                 //     int e = errno;
+            //                 //     if ( !( e == EAGAIN || e == EINTR || e == EWOULDBLOCK ) )
+            //                 //         throw fuzzuf::utils::errno_to_system_error(
+            //                 //                 e,
+            //                 //                 "read pid from child process failed during the execution"
+            //                 //               );
+            //                 // } else {
+            //                 //     read_buffer.resize( cur_size + read_stat );
+            //                 //     if ( read_buffer.size() == read_size ) {
+            //                 //         left_ms = 0;
+            //                 //         timeout = false;
+            //                 //     }
+            //                 // }
+            //             }
+            //         }
+            //         if( event.events == EPOLLHUP || event.events == EPOLLERR )
+            //             ERROR("pipe to the child process was unexpectedly closed");
+            //     }
+            //     const auto end_date = std::chrono::steady_clock::now();
+            //     const auto elapsed = std::chrono::duration_cast< std::chrono::milliseconds >( end_date - begin_date ).count();
+            //     if ( left_ms < elapsed ) left_ms = 0;
+            //     else left_ms -= elapsed;
+            // }
         } catch(const FileError &e) {
             ERROR("Unable to request new process from fork server (OOM?)");
         }
-        if( read_buffer.size() >= 4u )
-            child_pid = *reinterpret_cast< std::uint32_t* >( read_buffer.data() );
-
-        if (child_pid <= 0) ERROR("Fork server is misbehaving (OOM?)");
     } else {
         if (record_stdout_and_err) {
             if ( pipe( stdout_fd.data() ) < 0 ) {
@@ -560,31 +551,24 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
 
     int put_status; // PUT's status(retrieved via waitpid)
     if (forksrv) {
-        if( timeout ) { // The execution time may exceeded due to input that causes hanging was passed.
-            KillChildWithoutWait(); // After killing PUT that timed out, retrive put_status from fork server again.
-            child_timed_out = true;
-        }
-
-        if( read_buffer.size() < 8u ) {
-            std::size_t cur_size = read_buffer.size();
-            read_buffer.resize( read_size );
-            Util::ReadFile(
-                    forksrv_read_fd,
-                    std::next( read_buffer.data(), cur_size ),
-                    read_size - cur_size,
-                    false
-            );
-        }
+        // if( timeout ) { // The execution time may exceeded due to input that causes hanging was passed.
+        //     KillChildWithoutWait(); // After killing PUT that timed out, retrive put_status from fork server again.
+        //     child_timed_out = true;
+        // }
 
         if (record_stdout_and_err) {
             while( detail::read_chunk( stdout_buffer, fork_server_stdout_fd ) );
             while( detail::read_chunk( stderr_buffer, fork_server_stderr_fd ) );
         }
 
-        if( read_buffer.size() >= 8u )
-            put_status = *reinterpret_cast< std::uint32_t* >( std::next( read_buffer.data(), 4u ) );
-        else
-            ERROR("Unable to communicate with fork server (OOM?)");
+        // HACK: forkserver側でwaitpidのstatusを取得するのが難しいので仕方ない
+        if (response.exit_code > 0) {
+            // 0x7f: WIFEXITED() = true
+            // [7:0]: WIFSIGNALED() ホントかよ
+            put_status = response.exit_code | 0x7f;
+        } else {
+            put_status = response.exit_code << 8 | 0x7f;
+        }
     } else {
 	// Initialize a flag that indicate whether the PUT hanged.
 	// It is set in the signal handler.
@@ -908,12 +892,6 @@ void NativeLinuxExecutor::SetupEnvironmentVariablesForTarget() {
  *  - Setup the pipe between parent process ( the process that runs fuzzuf ) and child process.
  */
 void NativeLinuxExecutor::SetupForkServer() {
-    // set of fd of pipe.
-    // Each is used for parent -> child and child -> parent data transfer.
-    int par2chld[2], chld2par[2];
-
-    if (pipe(par2chld) || pipe(chld2par)) ERROR("pipe() failed");
-
     std::array< int, 2u > stdout_fd{ -1, -1 };
     std::array< int, 2u > stderr_fd{ -1, -1 };
 
@@ -936,12 +914,12 @@ void NativeLinuxExecutor::SetupForkServer() {
 
 	// Although since FORKSRV_FD_WRITE=199, FORKSRV_FD_READ=198, the required limit is 200,
 	// set std::max() + 1 to suppose those values are changed in future.
-        long unsigned int needed_fd_lim = std::max(FORKSRV_FD_WRITE, FORKSRV_FD_READ) + 1;
-        if (!getrlimit(RLIMIT_NOFILE, &r) && r.rlim_cur < needed_fd_lim) {
+        // long unsigned int needed_fd_lim = std::max(FORKSRV_FD_WRITE, FORKSRV_FD_READ) + 1;
+        // if (!getrlimit(RLIMIT_NOFILE, &r) && r.rlim_cur < needed_fd_lim) {
 
-            r.rlim_cur = needed_fd_lim;
-            setrlimit(RLIMIT_NOFILE, &r); /* Ignore errors */
-        }
+        //     r.rlim_cur = needed_fd_lim;
+        //     setrlimit(RLIMIT_NOFILE, &r); /* Ignore errors */
+        // }
 
         if (exec_memlimit) {
             r.rlim_max = r.rlim_cur = ((rlim_t)exec_memlimit) << 20;
@@ -979,21 +957,10 @@ void NativeLinuxExecutor::SetupForkServer() {
             dup2(null_fd, 0);
         }
 
-        if (dup2(par2chld[0], FORKSRV_FD_READ) < 0) ERROR("dup2() failed");
-        if (dup2(chld2par[1], FORKSRV_FD_WRITE) < 0) ERROR("dup2() failed");
-
-        close(par2chld[0]);
-        close(par2chld[1]);
-        close(chld2par[0]);
-        close(chld2par[1]);
-
         execve(cargv[0], (char**)cargv.data(), environ);
 	// TODO: It must be discussed whether it is needed that equivalent to EXEC_FAIL_SIG that is used in non-fork server mode.
         exit(0);
     }
-
-    close(par2chld[0]);
-    close(chld2par[1]);
 
     if (record_stdout_and_err) {
         close( stdout_fd[ 1 ] );
@@ -1029,30 +996,6 @@ void NativeLinuxExecutor::SetupForkServer() {
 
             ERROR("Unable to epoll stderr pipe");
         }
-    }
-
-    forksrv_write_fd = par2chld[1];
-    forksrv_read_fd = chld2par[0];
-    fork_server_read_event.data.fd = forksrv_read_fd;
-    fork_server_read_event.events = EPOLLIN|EPOLLRDHUP;
-    if( epoll_ctl(
-      fork_server_epoll_fd,
-      EPOLL_CTL_ADD,
-      forksrv_read_fd,
-      &fork_server_read_event
-    ) < 0 ) {
-      ERROR("Unable to epoll read pipe");
-    }
-
-    // Wait for fork server to launch with 10 seconds of time limit (Conforming AFL++ that looks waiting 10 seconds.).
-    // The handshake is sent from remote on launched.
-    u8 tmp[4];
-    u32 time_limit = 10000;
-    u32 res = Util::ReadFileTimed(forksrv_read_fd, &tmp, 4, time_limit);
-    // FIXME: There are various reason to fail fork server, and as the responses varies and identifiable, it is more decent to classify them.
-    if (res == 0 || res > time_limit) { 
-        TerminateForkServer();
-        ERROR("Fork server crashed");
     }
 
     return;

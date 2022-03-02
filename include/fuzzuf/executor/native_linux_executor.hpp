@@ -29,6 +29,7 @@
 #include "fuzzuf/utils/common.hpp"
 #include "fuzzuf/feedback/inplace_memory_feedback.hpp"
 #include "fuzzuf/feedback/exit_status_feedback.hpp"
+#include "fuzzuf/channel/zeromq_channel.hpp"
 
 // A class for fuzz execution under native Linux environment (i.e. the Linux environment where the fuzzer tracer and the fuzz target are the same)
 //
@@ -50,8 +51,8 @@ public:
     static constexpr int CPUID_DO_NOT_BIND    = -2;
     static constexpr int CPUID_BIND_WHICHEVER = -1;
 
-    static constexpr int FORKSRV_FD_READ  = 198;
-    static constexpr int FORKSRV_FD_WRITE = 199;
+    // static constexpr int FORKSRV_FD_READ  = 198;
+    // static constexpr int FORKSRV_FD_WRITE = 199;
 
     static constexpr const char* AFL_SHM_ENV_VAR = "__AFL_SHM_ID";
     // FIXME: we have to modify fuzzuf-cc to change __WYVERN_SHM_ID to __FUZZUF_SHM_ID
@@ -78,8 +79,8 @@ public:
     int afl_shmid; 
 
     int forksrv_pid;
-    int forksrv_read_fd;
-    int forksrv_write_fd;
+    // int forksrv_read_fd;
+    // int forksrv_write_fd;
 
     u8 *bb_trace_bits;
     u8 *afl_trace_bits;
@@ -158,4 +159,6 @@ private:
     epoll_event fork_server_read_event;
 
     bool record_stdout_and_err;
+
+    ZeroMqChannel put_channel;
 };

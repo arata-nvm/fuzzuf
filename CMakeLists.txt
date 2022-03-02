@@ -99,6 +99,23 @@ if( ${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.6.0 )
   endif()
 endif()
 
+### ZeroMQ
+find_package(PkgConfig)
+pkg_check_modules(PC_ZeroMQ QUIET zmq)
+find_path(ZeroMQ_INCLUDE_DIR
+        NAMES zmq.h czmq.h
+        #PATHS ${PC_ZeroMQ_INCLUDE_DIRS}
+        REQUIRED # later CMake 3.18
+        )
+find_library(ZeroMQ_LIBRARY
+        NAMES zmq
+        #PATHS ${PC_ZeroMQ_LIBRARY_DIRS}
+        REQUIRED # later CMake 3.18
+        )
+include(CMakePrintHelpers) # DEBUG: 
+cmake_print_variables(ZeroMQ_INCLUDE_DIR) # DEBUG: 
+cmake_print_variables(ZeroMQ_LIBRARY) # DEBUG: 
+
 set( ADDITIONAL_COMPILE_FLAGS )
 list(APPEND ADDITIONAL_COMPILE_FLAGS "-Werror" )
 option( ENABLE_ADDRSAN "build with address sanitizer" OFF)
@@ -308,6 +325,7 @@ set(
   algorithms/vuzzer/vuzzer_testcase.cpp
   algorithms/vuzzer/vuzzer_update_hierarflow_routines.cpp
   algorithms/vuzzer/vuzzer_util.cpp
+  channel/zeromq_channel.cpp
   exec_input/exec_input.cpp
   exec_input/exec_input_set.cpp
   exec_input/on_disk_exec_input.cpp
@@ -419,6 +437,8 @@ list(APPEND FUZZUF_INCLUDE_DIRS "${NLOHMANN_JSON_INCLUDE_DIRS}" )
 list(APPEND FUZZUF_LIBRARIES "${Python3_LIBRARIES}")
 list(APPEND FUZZUF_LIBRARIES "${${CMAKE_DL_LIBS}}")
 list(APPEND FUZZUF_LIBRARIES "${NLOHMANN_JSON_LIBRARIES}" )
+list(APPEND FUZZUF_INCLUDE_DIRS "${ZeroMQ_INCLUDE_DIR}")
+list(APPEND FUZZUF_LIBRARIES "${ZeroMQ_LIBRARY}")
 if( ${CMAKE_VERSION} VERSION_LESS 3.15.0 )
   list(APPEND FUZZUF_INCLUDE_DIRS "${Boost_INCLUDE_DIRS}" )
 else()
