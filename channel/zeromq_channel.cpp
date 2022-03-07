@@ -1,4 +1,4 @@
-#include "fuzzuf/executor/native_linux_executor.hpp"
+#include "fuzzuf/channel/zeromq_channel.hpp"
 #include "fuzzuf/logger/logger.hpp"
 
 ZeroMqChannel::ZeroMqChannel(
@@ -29,7 +29,7 @@ int ZeroMqChannel::Send(void *buf, size_t size) {
         ERROR("[!] [ZeroMqChannel] Failed to send");
         exit(1);
     }
-    // DEBUG("[*] [ZeroMqChannel] Send %d bytes", nbytes);
+    DEBUG("[*] [ZeroMqChannel] Send %d bytes", nbytes);
     return nbytes;
 }
 
@@ -40,6 +40,28 @@ int ZeroMqChannel::Recv(void *buf, size_t size) {
         ERROR("[!] [ZeroMqChannel] Failed to recv");
         exit(1);
     }
-    // DEBUG("[*] [ZeroMqChannel] Recv %d bytes", nbytes);
+    DEBUG("[*] [ZeroMqChannel] Recv %d bytes", nbytes);
     return nbytes;
+}
+
+pid_t ZeroMqChannel::SetupForkServer(char *const pargv[]) {
+    DEBUG("[*] [ZeroMqChannel] pargv[0] = %s", pargv[0]);
+
+    forksrv_pid = fork();
+    if (forksrv_pid < 0) {
+        perror("fork() failed");
+        exit(1);
+    }
+
+    if (forksrv_pid == 0) {
+        // FIXME: 無条件で標準（エラ）出力をクローズ
+        int null_fd = Util::OpenFile("/dev/null", O_RDONLY | O_CLOEXEC);
+        dup2(null_fd, 1);
+        dup2(null_fd, 2);
+
+        execv(pargv[0], pargv);
+        exit(0);
+    }
+
+    return forksrv_pid;
 }

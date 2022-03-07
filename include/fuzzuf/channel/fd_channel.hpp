@@ -5,13 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <zmq.h>
-#include <czmq.h>
 
-class ZeroMqChannel /* : public Channel */ {
+class FdChannel /* : public Channel */ {
 public:
-    ZeroMqChannel(const char *endpoint);
-    ~ZeroMqChannel();
+    FdChannel();
+    ~FdChannel();
 
     pid_t SetupForkServer(char *const pargv[]);
 
@@ -21,9 +19,11 @@ public:
 
 private:
     pid_t forksrv_pid;
-    const char *endpoint;
-    void *context; // TODO: Use smart pointer
-    void *socket; // TODO: Use smart pointer
+    int forksrv_read_fd;
+    int forksrv_write_fd;
+
+    static const int FORKSRV_FD_READ = 196; // 本家とバッチングしない値で
+    static const int FORKSRV_FD_WRITE = 197;
 };
 
 // FIXME: 一時的な定義。Protocol buffer使って
@@ -38,5 +38,4 @@ enum ExecutePUTError {
 typedef struct {
     enum ExecutePUTError error;
     int32_t exit_code;
-    int32_t signal_number;
 } ExecutePUTAPIResponse;

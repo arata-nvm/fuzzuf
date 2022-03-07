@@ -325,6 +325,7 @@ set(
   algorithms/vuzzer/vuzzer_testcase.cpp
   algorithms/vuzzer/vuzzer_update_hierarflow_routines.cpp
   algorithms/vuzzer/vuzzer_util.cpp
+  channel/fd_channel.cpp
   channel/zeromq_channel.cpp
   exec_input/exec_input.cpp
   exec_input/exec_input_set.cpp

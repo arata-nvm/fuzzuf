@@ -103,6 +103,7 @@ NativeLinuxExecutor::NativeLinuxExecutor(
     child_timed_out( false ),
     record_stdout_and_err( record_stdout_and_err ),
     put_channel( "ipc:///tmp/forkserver.ipc" ) // FIXME: ユーザーが設定可能に
+    // put_channel()
 {
 
 #ifdef __linux__
@@ -119,6 +120,19 @@ NativeLinuxExecutor::NativeLinuxExecutor(
             }
 
             binded_cpuid = *vacant_cpus.begin(); // just return a random number
+
+            // FIXME: シン・forkserverのために3コア確保
+            auto it = vacant_cpus.begin();
+            int core_1 = *it;
+            int core_2 = *std::next(it);
+            int core_3 = *std::next(it, 2);
+            DEBUG("[*] Bind CPU cores: %d, %d, %d", core_1, core_2, core_3);
+            cpu_set_t c;
+            CPU_ZERO(&c);
+            CPU_SET(core_1, &c);
+            CPU_SET(core_2, &c);
+            CPU_SET(core_3, &c);
+            if (sched_setaffinity(0, sizeof(c), &c)) ERROR("sched_setaffinity failed");
         } else { 
             if (cpuid_to_bind < 0 || cpu_core_count <= cpuid_to_bind) {
                 ERROR("The CPU core id to bind should be between 0 and %d", cpu_core_count - 1);
@@ -129,13 +143,12 @@ NativeLinuxExecutor::NativeLinuxExecutor(
             }
 
             binded_cpuid = cpuid_to_bind;
+
+            cpu_set_t c;
+            CPU_ZERO(&c);
+            CPU_SET(binded_cpuid.value(), &c);
+            if (sched_setaffinity(0, sizeof(c), &c)) ERROR("sched_setaffinity failed");
         }
-
-        cpu_set_t c;
-        CPU_ZERO(&c);
-        CPU_SET(binded_cpuid.value(), &c);
-
-        if (sched_setaffinity(0, sizeof(c), &c)) ERROR("sched_setaffinity failed");
     }
 #else 
     if (cpuid_to_bind != CPUID_DO_NOT_BIND) {
@@ -162,7 +175,8 @@ NativeLinuxExecutor::NativeLinuxExecutor(
     SetupEnvironmentVariablesForTarget();
 
     if (forksrv) {
-        SetupForkServer();
+        // SetupForkServer();
+        put_channel.SetupForkServer((char* const*) cargv.data());
     }
 }
 
@@ -421,6 +435,9 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
 
             // Wait for PUT exit
             this->put_channel.Recv((void *) &response, sizeof(response));
+            DEBUG("Response { error=%d, exit_code=%d, signal_number=%d }", 
+                response.error, response.exit_code, response.signal_number);
+            assert(response.error == ExecutePUTError::None);
 
             // TODO: fork_server_stdout_fd, fork_server_stderr_fd の扱いは保留
             // epoll_event event;
@@ -549,7 +566,22 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
         }
     }
 
-    int put_status; // PUT's status(retrieved via waitpid)
+    // int put_status; // PUT's status(retrieved via waitpid)
+
+    // forkserver modeあり・なしに同時対応つらい
+    typedef struct {
+        bool is_stopped;
+        bool is_signaled;
+        int signal_number;
+        int exit_status;
+    } PUTStatus;
+    PUTStatus put_status {
+        .is_stopped = false,
+        .is_signaled = false,
+        .signal_number = 0,
+        .exit_status = 0,
+    };
+
     if (forksrv) {
         // if( timeout ) { // The execution time may exceeded due to input that causes hanging was passed.
         //     KillChildWithoutWait(); // After killing PUT that timed out, retrive put_status from fork server again.
@@ -562,12 +594,15 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
         }
 
         // HACK: forkserver側でwaitpidのstatusを取得するのが難しいので仕方ない
-        if (response.exit_code > 0) {
-            // 0x7f: WIFEXITED() = true
-            // [7:0]: WIFSIGNALED() ホントかよ
-            put_status = response.exit_code | 0x7f;
-        } else {
-            put_status = response.exit_code << 8 | 0x7f;
+        put_status.is_stopped = true;
+        put_status.exit_status = response.exit_code;
+        if (response.signal_number > 0) {
+            put_status.is_signaled = true;
+            put_status.signal_number = response.signal_number;
+            if (put_status.signal_number == SIGKILL) {
+                child_timed_out = true;
+                DEBUG("PUT Execution Timeout");
+            }
         }
     } else {
 	// Initialize a flag that indicate whether the PUT hanged.
@@ -663,8 +698,12 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
             }
             close( epoll_fd );
         }
-
-        if (waitpid(child_pid, &put_status, 0) <= 0) ERROR("waitpid() failed");
+        
+        int __put_status;
+        if (waitpid(child_pid, &__put_status, 0) <= 0) ERROR("waitpid() failed");
+        put_status.is_stopped = WIFSTOPPED(__put_status);
+        put_status.is_signaled = WIFSIGNALED(__put_status);
+        put_status.signal_number = WTERMSIG(__put_status);
 
         if (record_stdout_and_err) {
             bool cont = true;
@@ -688,8 +727,12 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
     }
 
     // If the PUT process is not stopped but exited ( It should happen except in persistent mode ), since child_pid is no longer needed, it can be set to 0.
-    if (!WIFSTOPPED(put_status)) child_pid = 0; 
-    DEBUG("Exec Status %d (pid %d)\n", put_status, child_pid);
+    if (!put_status.is_stopped) child_pid = 0; 
+    DEBUG("Exec Status { is_signaled=%s, signal_number=%d, exit_status=%d } (pid %d)\n", 
+        put_status.is_signaled ? "true" : "false", 
+        put_status.signal_number,
+        put_status.exit_status,
+        child_pid);
 
     /* Any subsequent operations on trace_bits must not be moved by the
        compiler below this point. Past this location, trace_bits[] behave
@@ -710,8 +753,8 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
     last_signal = 0;
 
     /* Report outcome to caller. */
-    if (WIFSIGNALED(put_status)) {
-        last_signal = WTERMSIG(put_status);
+    if (put_status.is_signaled) {
+        last_signal = put_status.signal_number;
 
         if (child_timed_out && last_signal == SIGKILL) 
             last_exit_reason = PUTExitReasonType::FAULT_TMOUT;
@@ -724,7 +767,7 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
     /* A somewhat nasty hack for MSAN, which doesn't support abort_on_error and
        must use a special exit code. */
 
-    if (uses_asan && WEXITSTATUS(put_status) == MSAN_ERROR) {
+    if (uses_asan && put_status.exit_status == MSAN_ERROR) {
         last_exit_reason = PUTExitReasonType::FAULT_CRASH;
         return;
     }

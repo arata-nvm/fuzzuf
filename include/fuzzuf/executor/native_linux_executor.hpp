@@ -30,6 +30,7 @@
 #include "fuzzuf/feedback/inplace_memory_feedback.hpp"
 #include "fuzzuf/feedback/exit_status_feedback.hpp"
 #include "fuzzuf/channel/zeromq_channel.hpp"
+// #include "fuzzuf/channel/fd_channel.hpp"
 
 // A class for fuzz execution under native Linux environment (i.e. the Linux environment where the fuzzer tracer and the fuzz target are the same)
 //
@@ -161,4 +162,5 @@ private:
     bool record_stdout_and_err;
 
     ZeroMqChannel put_channel;
+    // FdChannel put_channel;
 };
