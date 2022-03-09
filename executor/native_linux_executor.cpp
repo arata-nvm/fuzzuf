@@ -68,7 +68,7 @@ NativeLinuxExecutor::NativeLinuxExecutor(
     u32 afl_shm_size,
     u32  bb_shm_size,
     bool record_stdout_and_err,
-    fuzzuf::executor::EnvironmentVariables &&environment_variables_
+    std::vector< std::string > &&environment_variables_
 ) :
     Executor( argv, exec_timelimit_ms, exec_memlimit, path_to_write_input.string() ),
     forksrv( forksrv ),
@@ -100,6 +100,7 @@ NativeLinuxExecutor::NativeLinuxExecutor(
     // It is sufficient if each NativeLinuxExecutor::Run() can refer the memory
     SetupSharedMemories();
     SetupEnvironmentVariablesForTarget();
+    CreateJoinedEnvironmentVariables();
 
     if (forksrv) {
         SetupForkServer();
@@ -487,13 +488,12 @@ void NativeLinuxExecutor::Run(const u8 *buf, u32 len, u32 timeout_ms) {
 		// stdin is bound to /dev/null ( Providing "nothing" as input ).
                 dup2(null_fd, 0);
             }
-	    std::vector< char* > temporal_envp;
             // Execute new executable binary on the child process.
 	    // If failed, that matter is recorded to child_state.
             child_state->exec_result = execve(
                 cargv[0],
                 (char**)cargv.data(),
-                GetJoinedEnvironmentVariables( temporal_envp )
+                raw_environment_variables.data()
 	    );
             child_state->exec_errno = errno;
 
@@ -823,27 +823,20 @@ void NativeLinuxExecutor::SetupEnvironmentVariablesForTarget() {
 }
 
 
-char **NativeLinuxExecutor::GetJoinedEnvironmentVariables(
-    std::vector< char* > &raw_environment_variables
-) const {
-    char **raw_envp = environ;
-    if( !environment_variables.empty() ) {
-        raw_environment_variables.clear();
-        for( auto e = environ; *e; ++e )
-            raw_environment_variables.push_back( *e );
-	std::transform(
-          environment_variables.begin(),
-	  environment_variables.end(),
-	  std::back_inserter( raw_environment_variables ),
-	  []( const auto &e ) {
-	    return const_cast< char* >( e.c_str() );
-	  }
-        );
-	raw_environment_variables.push_back( nullptr );
-	raw_environment_variables.shrink_to_fit();
-	raw_envp = raw_environment_variables.data();
-    }
-    return raw_envp;
+void NativeLinuxExecutor::CreateJoinedEnvironmentVariables() {
+    raw_environment_variables.clear();
+    for( auto e = environ; *e; ++e )
+        raw_environment_variables.push_back( *e );
+    std::transform(
+      environment_variables.begin(),
+      environment_variables.end(),
+      std::back_inserter( raw_environment_variables ),
+      []( const auto &e ) {
+        return const_cast< char* >( e.c_str() );
+      }
+    );
+    raw_environment_variables.push_back( nullptr );
+    raw_environment_variables.shrink_to_fit();
 }
 
 /*
@@ -934,11 +927,10 @@ void NativeLinuxExecutor::SetupForkServer() {
         close(chld2par[0]);
         close(chld2par[1]);
 
-        std::vector< char* > temporal_envp;
         execve(
             cargv[0],
             (char**)cargv.data(),
-            GetJoinedEnvironmentVariables( temporal_envp )
+            raw_environment_variables.data()
 	);
 	// TODO: It must be discussed whether it is needed that equivalent to EXEC_FAIL_SIG that is used in non-fork server mode.
         exit(0);
